@@ -1,10 +1,11 @@
 name: test
 on:
-  push:
-    branches:
-      - "main"
-      - "master"
-  pull_request:
+  workflow_dispatch:
+    inputs:
+      test-filter:
+        description: "Optional ava test file glob(s) to run instead of the full suite"
+        required: false
+        default: ""
 
 defaults:
   run:
@@ -13,6 +14,7 @@ defaults:
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -26,14 +28,57 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
 
+      - name: Configure npm time machine registry
+        run: |
+          npm config set registry https://time-machines-npm.sealsecurity.io/
+          npm config set //time-machines-npm.sealsecurity.io/:_authToken=2026-06-09T07:40:08.836000Z
+
+      # npm 6 (bundled with Node 14) cannot read lockfileVersion 3
+      - name: upgrade npm for lockfile v3
+        if: matrix.node == 14
+        run: npm i -g npm@9
+
       - name: npm ci
         run: npm ci --ignore-scripts
 
       - name: test
         run: |
+          TESTS="${{ inputs.test-filter }}"
+          if [ -z "$TESTS" ]; then TESTS="src/__tests__/*.mjs"; fi
           case "${{ matrix.node }}" in "20"|"22"|"24")
-            npm test
+            npx nyc ava $TESTS --node-arguments=--no-experimental-detect-module --verbose
           ;;*)
-          npm test:node-lt-20
+          npx nyc ava $TESTS --verbose
           ;;
           esac
+
+  pack:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.11.0
+
+      - name: Configure npm time machine registry
+        run: |
+          npm config set registry https://time-machines-npm.sealsecurity.io/
+          npm config set //time-machines-npm.sealsecurity.io/:_authToken=2026-06-09T07:40:08.836000Z
+
+      - name: npm ci
+        run: npm ci --ignore-scripts
+
+      - name: build
+        run: npm run prepare
+
+      - name: pack
+        run: npm pack --ignore-scripts
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: postcss-selector-parser-tgz
+          path: postcss-selector-parser-7.1.2.tgz
+          if-no-files-found: error
